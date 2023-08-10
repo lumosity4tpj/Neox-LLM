@@ -173,6 +173,12 @@ def get_args():
         type=str,
     )
     group.add_argument(
+        "--mask-before-text",
+        default=None,
+        help="apply loss masks before certain text(s).",
+        type=str,
+    )
+    group.add_argument(
         "--num-docs",
         default=None,
         help="Optional: Number of documents in the input data (if known) for an accurate progress bar.",
@@ -188,6 +194,8 @@ def get_args():
             "HFTokenizer",
             "GPT2BPETokenizer",
             "CharLevelTokenizer",
+            "TiktokenTokenizer",
+            "SPMTokenizer",
         ],
         help="What type of tokenizer to use.",
     )
@@ -206,6 +214,11 @@ def get_args():
         help="Append an <eod> token to the end of a document.",
     )
     group.add_argument("--ftfy", action="store_true", help="Use ftfy to clean text")
+    group.add_argument(
+        "--include-pivot",
+        action="store_true",
+        help="mask include pivot",
+    )
     group = parser.add_argument_group(title="output data")
     group.add_argument(
         "--output-prefix",
@@ -296,6 +309,8 @@ def main():
     
     if args.mask_before_token is not None:
         token_mask = [int(re.sub(r'[^0-9]', '', r)) for r in args.mask_before_token.split(",") if re.sub(r'[^0-9]', '', r)]
+    elif args.mask_before_text is not None:
+        token_mask = tokenizer.tokenize(args.mask_before_text)
     else:
         token_mask = []
 
@@ -350,8 +365,8 @@ def main():
         for key, sentences in doc.items():
             for sentence in sentences:
                 builders[key].add_item(np.array(sentence, dtype=builders[key].dtype))
-                if token_mask: 
-                    masked_sentence = mask(sentence, token_mask)
+                if token_mask:
+                    masked_sentence = mask(sentence, token_mask, include_pivot=args.include_pivot)
                     builders["label"].add_item(np.array(masked_sentence, dtype=builders["text"].dtype))
             # separate with eos token
             builders[key].end_document()
