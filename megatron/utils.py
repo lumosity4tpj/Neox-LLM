@@ -78,19 +78,27 @@ def get_attn_mask(seq_length, device):
 
 def get_ltor_masks_and_position_ids(
     data,
+    sentence_ids,
+    position_ids,
     eod_token,
     eod_mask_loss=False,
+    reset_attention_mask=False,
+    reset_position_ids=False,
 ):
-    """Build masks and position id for left to right model."""
-
     # Extract batch size and sequence length.
     batch_size, seq_length = data.size()
 
     # Attention mask (lower triangular).
-    attention_mask = get_attn_mask(
-        seq_length=seq_length,
-        device=data.device,
-    )
+    if reset_attention_mask:
+        attention_mask = get_attn_mask(seq_length, data.device)
+        mask = sentence_ids.repeat(1, seq_length).view(-1, seq_length, seq_length).unsqueeze(1)
+        mask = mask == mask.permute((0, 1, 3, 2))
+        attention_mask = ~(~attention_mask & mask)
+    else:
+        attention_mask = get_attn_mask(
+            seq_length=seq_length,
+            device=data.device,
+        )
 
     # Loss mask.
     loss_mask = torch.ones(data.size(), dtype=torch.float, device=data.device)
@@ -98,8 +106,11 @@ def get_ltor_masks_and_position_ids(
         loss_mask[data == eod_token] = 0.0
 
     # Position ids.
-    position_ids = torch.arange(seq_length, dtype=torch.long, device=data.device)
-    position_ids = position_ids.unsqueeze(0).expand_as(data)
+    if reset_position_ids:
+        position_ids = position_ids
+    else:
+        position_ids = torch.arange(seq_length, dtype=torch.long, device=data.device)
+        position_ids = position_ids.unsqueeze(0).expand_as(data)
 
     return attention_mask, loss_mask, position_ids
 

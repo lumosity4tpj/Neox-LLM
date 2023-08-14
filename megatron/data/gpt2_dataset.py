@@ -39,11 +39,15 @@ class GPT2Dataset(torch.utils.data.Dataset):
         build_index_mappings=True,
         use_shared_fs=True,
         label_dataset=None,
+        finetune=False,
+        pad_token=None,
     ):
 
         self.name = name
         self.indexed_dataset = indexed_dataset
         self.label_dataset = label_dataset
+        self.pad_token = pad_token
+        self.seq_length = seq_length
 
         # Checks
         assert np.min(documents) >= 0
@@ -60,6 +64,7 @@ class GPT2Dataset(torch.utils.data.Dataset):
                 seq_length,
                 seed,
                 use_shared_fs=use_shared_fs,
+                finetune=finetune,
             )
             self.shuffle_idx_len = self.shuffle_idx.shape[0] - 1
             self.sample_idx_len = self.sample_idx.shape[0] - 1
@@ -86,32 +91,54 @@ class GPT2Dataset(torch.utils.data.Dataset):
             samples = []
             # If we are within the same document, just extract the chunk.
             for n, dataset in enumerate(datasets):
+                sentence_ids = []
+                position_ids = []
+                i = 0
                 if doc_index_f == doc_index_l:
                     samples.append(dataset.get(
                         self.doc_idx[doc_index_f],
                         offset=offset_f,
                         length=offset_l - offset_f + 1,
                     ))
+                    sentence_ids += [doc_index_f] * samples[-1].shape[0]
+                    position_ids += list(range(samples[-1].shape[0]))
                 else:
                     # Otherwise, get the rest of the initial document.
                     sample_list = [
                         dataset.get(self.doc_idx[doc_index_f], offset=offset_f)
                     ]
+                    sentence_ids += [doc_index_f] * sample_list[-1].shape[0]
+                    position_ids += list(range(sample_list[-1].shape[0]))
                     # Loop over all in between documents and add the entire document.
                     for i in range(doc_index_f + 1, doc_index_l):
                         sample_list.append(dataset.get(self.doc_idx[i]))
+                        sentence_ids += [i] * sample_list[-1].shape[0]
+                        position_ids += list(range(sample_list[-1].shape[0]))
                     # And finally add the relevant portion of last document.
                     sample_list.append(
                         dataset.get(
                             self.doc_idx[doc_index_l], length=offset_l + 1
                         )
                     )
+                    sentence_ids += [doc_index_l] * sample_list[-1].shape[0]
+                    position_ids += list(range(sample_list[-1].shape[0]))
                     samples.append(np.concatenate(sample_list))
+                # padding using pad_token
+                padding_length = max(self.seq_length + 1 - samples[-1].shape[0], 0)
+                #print("padding_length", padding_length)
+                if n == 0:
+                    samples[-1] = np.pad(samples[-1], (0, padding_length), "constant", constant_values=(self.pad_token, self.pad_token))
+                else:
+                    samples[-1] = np.pad(samples[-1], (0, padding_length), "constant", constant_values=(-100, -100))
+                sentence_ids += [-1] * padding_length
+                position_ids += list(range(padding_length))
+                assert len(sentence_ids) == len(position_ids)
+                assert len(sentence_ids) == samples[0].shape[-1]
 
             if len(datasets) == 1:
-                return {"text": np.array(samples[0], dtype=np.int64)}
+                return {"text": np.array(samples[0], dtype=np.int64), "sentence_id": np.array(sentence_ids, dtype=np.int64), "position_id": np.array(position_ids, dtype=np.int64)}
             else:
-                return {"text": np.array(samples[0], dtype=np.int64), "label": np.array(samples[1], dtype=np.int64)}
+                return {"text": np.array(samples[0], dtype=np.int64), "label": np.array(samples[1], dtype=np.int64), "sentence_id": np.array(sentence_ids, dtype=np.int64), "position_id": np.array(position_ids, dtype=np.int64)}
         except IndexError:
             new_idx = idx % len(self)
             print(
@@ -129,6 +156,7 @@ def _build_index_mappings(
     seq_length,
     seed,
     use_shared_fs=True,
+    finetune=False,
 ):
     """Build doc-idx, sample-idx, and shuffle-idx.
     doc-idx: is an array (ordered) of documents to be used in training.
@@ -170,34 +198,49 @@ def _build_index_mappings(
             )
             # doc-idx.
             start_time = time.time()
-            doc_idx = _build_doc_idx(documents, num_epochs, np_rng)
-            np.save(doc_idx_filename, doc_idx, allow_pickle=True)
-            print_rank_0(
-                " > elapsed time to build and save doc-idx mapping "
-                "(seconds): {:4f}".format(time.time() - start_time)
-            )
-            # sample-idx.
-            start_time = time.time()
-            # Use C++ implementation for speed.
-            from megatron.data import helpers
-
-            assert doc_idx.dtype == np.int32
             assert sizes.dtype == np.int32
-
-            num_samples = (num_epochs * tokens_per_epoch - 1) / seq_length
-            if 2 * (num_samples + 1) < np.iinfo(np.int32).max:
-                sample_idx = helpers.build_sample_idx_int32(
-                    sizes, doc_idx, seq_length, num_epochs, tokens_per_epoch
-                )
-            else:
-                sample_idx = helpers.build_sample_idx_int64(
-                    sizes, doc_idx, seq_length, num_epochs, tokens_per_epoch
-                )
+            doc_idx, sample_idx = _build_doc_idx_and_sample_idx(
+                num_samples, seq_length, sizes, documents, np_rng, finetune
+            )
+            assert doc_idx.dtype == np.int32
+            np.save(doc_idx_filename, doc_idx, allow_pickle=True)
             np.save(sample_idx_filename, sample_idx, allow_pickle=True)
             print_rank_0(
-                " > elapsed time to build and save sample-idx mapping "
+                " > elapsed time to build and save doc-idx and sample-idx mapping "
                 "(seconds): {:4f}".format(time.time() - start_time)
             )
+            
+            # # doc-idx.
+            # start_time = time.time()
+            # doc_idx = _build_doc_idx(documents, num_epochs, np_rng)
+            # np.save(doc_idx_filename, doc_idx, allow_pickle=True)
+            # print_rank_0(
+            #     " > elapsed time to build and save doc-idx mapping "
+            #     "(seconds): {:4f}".format(time.time() - start_time)
+            # )
+            # # sample-idx.
+            # start_time = time.time()
+            # # Use C++ implementation for speed.
+            # from megatron.data import helpers
+
+            # assert doc_idx.dtype == np.int32
+            # assert sizes.dtype == np.int32
+
+            # num_samples = (num_epochs * tokens_per_epoch - 1) / seq_length
+            # if 2 * (num_samples + 1) < np.iinfo(np.int32).max:
+            #     sample_idx = helpers.build_sample_idx_int32(
+            #         sizes, doc_idx, seq_length, num_epochs, tokens_per_epoch
+            #     )
+            # else:
+            #     sample_idx = helpers.build_sample_idx_int64(
+            #         sizes, doc_idx, seq_length, num_epochs, tokens_per_epoch
+            #     )
+            # # sample_idx = _build_sample_idx(sizes, doc_idx, seq_length, num_epochs, tokens_per_epoch)
+            # np.save(sample_idx_filename, sample_idx, allow_pickle=True)
+            # print_rank_0(
+            #     " > elapsed time to build and save sample-idx mapping "
+            #     "(seconds): {:4f}".format(time.time() - start_time)
+            # )
             # shuffle-idx.
             start_time = time.time()
             # -1 is due to data structure used to retrieve the index:
@@ -253,6 +296,63 @@ def _num_epochs(tokens_per_epoch, seq_length, num_samples):
         # sample except for the last sample.
         if ((total_tokens - 1) // seq_length) >= num_samples:
             return num_epochs
+
+
+def _build_doc_idx_and_sample_idx(num_samples, seq_length, sizes, documents, np_rng, finetune):
+    documents = documents.tolist()
+    if finetune:
+        # Skip samples whose own length is greater than the length of the sequence
+        before_num_samples = len(documents)
+        documents = [documents[document_index] for document_index in range(len(documents)) if sizes[documents[document_index]] < seq_length + 1]
+        after_num_samples = len(documents)
+        print_rank_0("Please truncate the data in advance if there is a large number of skips: before_num_samples: {}, after_num_samples: {}".format(before_num_samples, after_num_samples))
+
+    np_rng.shuffle(documents)
+    doc_idx = documents[:]
+    sample_idx = []
+    # Beginning offset for each document.
+    doc_offset = 0
+    sample_idx_index = 0
+    doc_idx_index = 0
+    num_doc_per_samples_list = []
+    # !todo: need more sample_idx, else error in deepspeed(need to load the next iters)
+    while sample_idx_index < num_samples + 128:
+        remaining_seq_length = seq_length + 1
+        num_doc = 0
+        while remaining_seq_length != 0:
+            # Get the document length.
+            doc_id = doc_idx[doc_idx_index]
+            doc_length = sizes[doc_id] - doc_offset
+            # And add it to the current sequence.
+            remaining_seq_length -= doc_length
+            # If we have more than a full sequence, adjust offset and set
+            # remaining length to zero so we return from the while loop.
+            # Note that -1 here is for the same reason we have -1 in
+            # `_num_epochs` calculations.
+            if remaining_seq_length <= 0:
+                # Truncate during training and ensure complete sentences during testing
+                if finetune:
+                    doc_offset = 0
+                else:
+                    doc_offset += remaining_seq_length + doc_length - 1
+                remaining_seq_length = 0
+            else:
+                # Otherwise, start from the beginning of the next document.
+                doc_idx_index += 1
+                doc_offset = 0
+                # If the doc_idx_index is exceeded, it is selected again
+                if doc_idx_index % len(documents) == 0:
+                    np_rng.shuffle(documents)
+                    doc_idx += documents[:]
+            num_doc += 1
+        num_doc_per_samples_list.append(num_doc)
+        sample_idx.append([doc_idx_index, doc_offset])
+        sample_idx_index += 1
+        
+    print_rank_0("num_doc_per_samples: {}".format(sum(num_doc_per_samples_list) / len(num_doc_per_samples_list)))
+    doc_idx = np.array(doc_idx, dtype=np.int32)
+    sample_idx = np.array(sample_idx, dtype=np.int64)
+    return doc_idx, sample_idx
 
 
 def _build_doc_idx(documents, num_epochs, np_rng):

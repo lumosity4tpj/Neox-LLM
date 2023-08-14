@@ -287,15 +287,25 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
         labels = tokens_[:, 1:].contiguous()
     tokens = tokens_[:, :-1].contiguous()
 
+    sentence_ids = data_b["sentence_id"].long()
+    sentence_ids = sentence_ids[:, :-1].contiguous()
+    position_ids = data_b["position_id"].long()
+    position_ids = position_ids[:, :-1].contiguous()
+
     # Get the masks and position ids.
     attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(
         data=tokens,
+        sentence_ids=sentence_ids,
+        position_ids=position_ids,
         eod_token=neox_args.tokenizer.eod,
         eod_mask_loss=neox_args.eod_mask_loss,
+        reset_attention_mask=neox_args.reset_attention_mask,
+        reset_position_ids=neox_args.reset_position_ids,
     )
     # If `label` is present, any token < 0 (e.g., -100, the default for torch) skips the loss computation
     if "label" in data_b:
         loss_mask = (data_b["label"][:, 1:] >= 0).to(loss_mask.dtype)
+
     return tokens, labels, loss_mask, attention_mask, position_ids
 
 
@@ -303,7 +313,7 @@ def get_batch(neox_args, data_iterator):
     """Generate a batch"""
 
     # Items and their type.
-    keys = ["text", "label"] if neox_args.label_data_paths else ["text"]
+    keys = ["text", "label", "sentence_id", "position_id"] if neox_args.label_data_paths else ["text", "sentence_id", "position_id"]
     datatype = torch.int64
 
     # Broadcast data.
@@ -323,7 +333,7 @@ def get_batch(neox_args, data_iterator):
 def get_batch_pipe(data, neox_args, curr_scheduler=None):
     """A modification of get_batch() to work with the latest batch instead of an iterator."""
     # Items and their type.
-    keys = ["text", "label"] if neox_args.label_data_paths else ["text"]
+    keys = ["text", "label", "sentence_id", "position_id"] if neox_args.label_data_paths else ["text", "sentence_id", "position_id"]
     datatype = torch.int64
 
     tokens, labels, loss_mask, attention_mask, position_ids = _get_batch(

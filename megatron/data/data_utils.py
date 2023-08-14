@@ -98,11 +98,16 @@ def build_train_valid_test_datasets(
     seq_length,
     seed,
     skip_warmup,
+    label_path=None,
+    finetune=False,
+    pad_token=None,
 ):
     """Build train, valid, and test datasets."""
 
     # Indexed dataset.
     indexed_dataset = make_indexed_dataset(data_prefix, data_impl, skip_warmup)
+    if label_path is not None:
+        label_indexed_dataset = make_indexed_dataset(label_path, data_impl, skip_warmup)
 
     total_num_of_documents = indexed_dataset.sizes.shape[0]
     splits = get_train_valid_test_split_(splits_string, total_num_of_documents)
@@ -139,6 +144,9 @@ def build_train_valid_test_datasets(
                 seq_length,
                 seed,
                 use_shared_fs=use_shared_fs,
+                label_dataset=label_indexed_dataset if label_path else None,
+                finetune=finetune,
+                pad_token=pad_token,
             )
         return dataset
 
@@ -414,6 +422,9 @@ def build_train_valid_test_data_iterators(neox_args):
                 seq_length=neox_args.seq_length,
                 seed=neox_args.seed,
                 skip_warmup=(not neox_args.mmap_warmup),
+                label_path=neox_args.label_data_paths[0],
+                finetune=neox_args.finetune,
+                pad_token=neox_args.tokenizer.eod,
             )
 
         # Build dataloders.

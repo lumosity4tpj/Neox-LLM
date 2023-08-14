@@ -588,6 +588,16 @@ class NeoXArgsOther(NeoXArgsTemplate):
     Mask loss for the end of document tokens.
     """
 
+    reset_attention_mask: bool = False
+    """
+    Reset attention mask if concatenate samples
+    """
+
+    reset_position_ids: bool = False
+    """
+    Reset position id if concatenate samples
+    """
+
     adlr_autoresume: bool = False
     """
     Enable auto-resume on adlr cluster.
