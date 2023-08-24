@@ -334,7 +334,8 @@ class ParallelSelfAttention(nn.Module):
 
         self.attention_type = neox_args.attention_config[layer_number]
         self.use_flash_attention = self.attention_type == "flash"
-        self.sparse = self.attention_type not in ("global", "flash")
+        self.use_flash_attention_triton = self.attention_type == "flash_triton"
+        self.sparse = self.attention_type not in ("global", "flash", "flash_triton")
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -344,28 +345,34 @@ class ParallelSelfAttention(nn.Module):
             )
         else:
             if self.use_flash_attention:
-                from megatron.model.flash_attention import (
-                    flash_attn_unpadded_qkvpacked_func_cuda,
-                    flash_attn_unpadded_kvpacked_func_cuda,
-                    flash_attn_unpadded_unpacked_func_triton,
-                )
+                try:
+                    # flash_attn v2
+                    from megatron.model.flash_attention import flash_attn_unpadded_unpacked_func_triton
+                    from flash_attn import (
+                        flash_attn_func,
+                        flash_attn_kvpacked_func,
+                        flash_attn_qkvpacked_func,
+                        flash_attn_varlen_func,
+                        flash_attn_varlen_kvpacked_func,
+                        flash_attn_varlen_qkvpacked_func,
+                    )
+                    self.flash_triton_fn = flash_attn_unpadded_unpacked_func_triton
+                    self.flash_qkv_fn = flash_attn_varlen_qkvpacked_func
+                    self.flash_kv_fn = flash_attn_varlen_kvpacked_func
+                except:
+                    # flash_attn v1
+                    from megatron.model.flash_attention import (
+                        flash_attn_unpadded_qkvpacked_func_cuda,
+                        flash_attn_unpadded_kvpacked_func_cuda,
+                        flash_attn_unpadded_unpacked_func_triton,
+                    )
 
-                # self.flash_triton_fn = flash_attn_unpadded_unpacked_func_triton
-                # self.flash_qkv_fn = flash_attn_unpadded_qkvpacked_func_cuda
-                # self.flash_kv_fn = flash_attn_unpadded_kvpacked_func_cuda
-
-                from flash_attn import (
-                    flash_attn_func,
-                    flash_attn_kvpacked_func,
-                    flash_attn_qkvpacked_func,
-                    flash_attn_varlen_func,
-                    flash_attn_varlen_kvpacked_func,
-                    flash_attn_varlen_qkvpacked_func,
-                )
-
+                    self.flash_triton_fn = flash_attn_unpadded_unpacked_func_triton
+                    self.flash_qkv_fn = flash_attn_unpadded_qkvpacked_func_cuda
+                    self.flash_kv_fn = flash_attn_unpadded_kvpacked_func_cuda
+            elif self.use_flash_attention_triton:
+                from megatron.model.flash_attention import flash_attn_unpadded_unpacked_func_triton
                 self.flash_triton_fn = flash_attn_unpadded_unpacked_func_triton
-                self.flash_qkv_fn = flash_attn_varlen_qkvpacked_func
-                self.flash_kv_fn = flash_attn_varlen_kvpacked_func
             else:
                 self.scale_mask_softmax = FusedScaleMaskSoftmax(
                     input_in_fp16=self.fp16,
@@ -496,6 +503,22 @@ class ParallelSelfAttention(nn.Module):
         # change view [b, np, sq, hn]
         context_layer = context_layer.view(*output_size)
         return context_layer
+
+    def flash_attention_triton(self, query_layer, key_layer, value_layer, attention_mask_or_bias=None):
+        # [sq, b, np, hn] -> [b, sq, np, hn]
+        query_layer = query_layer.transpose(0, 1)
+        key_layer = key_layer.transpose(0, 1)
+        value_layer = value_layer.transpose(0, 1)
+
+        # matmul_result = self.flash_triton_fn(
+        #     query_layer, key_layer, value_layer, bias=attention_mask_or_bias, causal=False
+        # )
+        matmul_result = self.flash_triton_fn(
+            query_layer, key_layer, value_layer, bias=None, causal=True
+        )
+        matmul_result = matmul_result.transpose(1, 2)
+
+        return matmul_result
 
     def flash_attention(self, query_layer, key_layer, value_layer):
         # [b, np, sq, sk]
@@ -694,6 +717,9 @@ class ParallelSelfAttention(nn.Module):
 
         if self.use_flash_attention:
             context_layer = self.flash_attention(query_layer, key_layer, value_layer)
+        elif self.use_flash_attention_triton:
+            assert self.pos_emb != "alibi", "Not applicable to alibi"
+            context_layer = self.flash_attention_triton(query_layer, key_layer, value_layer, attention_mask.float())
         elif not self.sparse:
             context_layer = self.attention(
                 query_layer, key_layer, value_layer, layer_past, attention_mask

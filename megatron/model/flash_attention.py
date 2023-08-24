@@ -5,8 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from flash_attn import flash_attn_triton
-# import flash_attn_cuda
-import flash_attn_2_cuda as flash_attn_cuda
+try:
+    import flash_attn_2_cuda as flash_attn_cuda
+except:
+    import flash_attn_cuda
 
 
 def flash_attn_unpadded_unpacked_func_triton(
