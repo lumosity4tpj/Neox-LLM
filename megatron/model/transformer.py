@@ -510,12 +510,12 @@ class ParallelSelfAttention(nn.Module):
         key_layer = key_layer.transpose(0, 1)
         value_layer = value_layer.transpose(0, 1)
 
-        # matmul_result = self.flash_triton_fn(
-        #     query_layer, key_layer, value_layer, bias=attention_mask_or_bias, causal=False
-        # )
         matmul_result = self.flash_triton_fn(
-            query_layer, key_layer, value_layer, bias=None, causal=True
+            query_layer, key_layer, value_layer, bias=attention_mask_or_bias, causal=False
         )
+        # matmul_result = self.flash_triton_fn(
+        #     query_layer, key_layer, value_layer, bias=None, causal=True
+        # )
         matmul_result = matmul_result.transpose(1, 2)
 
         return matmul_result
@@ -719,7 +719,8 @@ class ParallelSelfAttention(nn.Module):
             context_layer = self.flash_attention(query_layer, key_layer, value_layer)
         elif self.use_flash_attention_triton:
             assert self.pos_emb != "alibi", "Not applicable to alibi"
-            context_layer = self.flash_attention_triton(query_layer, key_layer, value_layer, attention_mask.float())
+            attention_mask = torch.where(attention_mask, float("-inf"), 0)
+            context_layer = self.flash_attention_triton(query_layer, key_layer, value_layer, attention_mask)
         elif not self.sparse:
             context_layer = self.attention(
                 query_layer, key_layer, value_layer, layer_past, attention_mask
