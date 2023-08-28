@@ -336,6 +336,8 @@ class ParallelSelfAttention(nn.Module):
         self.use_flash_attention = self.attention_type == "flash"
         self.use_flash_attention_triton = self.attention_type == "flash_triton"
         self.sparse = self.attention_type not in ("global", "flash", "flash_triton")
+        self.use_reset_attention_mask = neox_args.reset_attention_mask
+        assert (self.use_reset_attention_mask and not self.use_flash_attention) or not self.use_reset_attention_mask, "unsupport the flash attention, please use global or flash attention triton"
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -510,12 +512,15 @@ class ParallelSelfAttention(nn.Module):
         key_layer = key_layer.transpose(0, 1)
         value_layer = value_layer.transpose(0, 1)
 
-        matmul_result = self.flash_triton_fn(
-            query_layer, key_layer, value_layer, bias=attention_mask_or_bias, causal=False
-        )
-        # matmul_result = self.flash_triton_fn(
-        #     query_layer, key_layer, value_layer, bias=None, causal=True
-        # )
+        if self.use_reset_attention_mask:
+            assert attention_mask_or_bias is not None
+            matmul_result = self.flash_triton_fn(
+                query_layer, key_layer, value_layer, bias=attention_mask_or_bias, causal=False
+            )
+        else:
+            matmul_result = self.flash_triton_fn(
+                query_layer, key_layer, value_layer, bias=None, causal=True
+            )
         matmul_result = matmul_result.transpose(1, 2)
 
         return matmul_result
@@ -719,6 +724,7 @@ class ParallelSelfAttention(nn.Module):
             context_layer = self.flash_attention(query_layer, key_layer, value_layer)
         elif self.use_flash_attention_triton:
             assert self.pos_emb != "alibi", "Not applicable to alibi"
+            # In flash_attention_triton.py, bias must be either q.dtype or float
             attention_mask = torch.where(attention_mask, float("-inf"), 0)
             context_layer = self.flash_attention_triton(query_layer, key_layer, value_layer, attention_mask)
         elif not self.sparse:

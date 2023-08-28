@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from flash_attn import flash_attn_triton
+# from flash_attn import flash_attn_triton
+import flash_attn_triton
 try:
     import flash_attn_2_cuda as flash_attn_cuda
 except:

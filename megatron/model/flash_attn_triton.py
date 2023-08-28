@@ -165,11 +165,11 @@ def _fwd_kernel(
             # Slightly faster to multiply the softmax_scale in the tl.exp below since the compiler
             # can then fuse the mult and add into an fma instruction. But if we have bias we need to
             # to multiply with softmax_scale here.
-            #qk = tl.where(bias==0, qk * softmax_scale, -3.40282e+38)
             qk = qk * softmax_scale + bias
             m_ij = tl.maximum(tl.max(qk, 1), lse_i)
-            # p = tl.exp(qk - m_ij[:, None])
-            _m_ij = tl.where(m_ij != float("-inf"), m_ij, -3.40282e+38)
+            # p = tl.exp(qk - m_ij[:, None]) 
+            # Concat: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf'
+            _m_ij = tl.where(m_ij != float("-inf"), m_ij, torch.finfo(torch.float32).min)
             p = tl.exp(qk - _m_ij[:, None])
         else:
             m_ij = tl.maximum(tl.max(qk, 1) * softmax_scale, lse_i)
@@ -178,6 +178,7 @@ def _fwd_kernel(
 
         # scale acc_o
         # acc_o_scale = tl.exp(m_i - m_ij)
+        # Concat: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf'
         acc_o_scale = tl.exp(m_i - _m_ij)
 
         # # -- update output accumulator --
@@ -204,12 +205,13 @@ def _fwd_kernel(
 
         # -- update statistics
         m_i = m_ij
-        #l_i_new = tl.exp(lse_i - m_ij) + l_ij
+        # l_i_new = tl.exp(lse_i - m_ij) + l_ij
+        # Concat: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf'
         l_i_new = tl.exp(lse_i - _m_ij) + l_ij 
         lse_i = m_ij + tl.log(l_i_new)
 
-    ########################### for padding, may lse_i == -inf && m_i == -inf
-    lse_i = tl.where(lse_i != float("-inf"), lse_i, -3.40282e+38)
+    # Padding: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf', store lse_i for bwd
+    lse_i = tl.where(lse_i != float("-inf"), lse_i, torch.finfo(torch.float32).min)
     o_scale = tl.exp(m_i - lse_i)
     # BUG: have to store and immediately load
     tl.store(t_ptrs, o_scale)
