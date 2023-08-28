@@ -1,6 +1,6 @@
 {
   # Tokenizer /  checkpoint settings - you will need to change these to the location you have them saved in
-  "vocab_file": "./model/pretrain/llama/7B/tokenizer.model",
+  "vocab_file": "./vocab_file/tokenizer.model",
   "save": "./model/sft/llama/7B/alpaca_gpt4_reset_mask_and_id",
   "load": "./model/pretrain/llama/7B/",
 
@@ -33,7 +33,7 @@
   # "rotary_learnable": false,
   "rotary_pct": 1.0,
   "no-weight-tying": true,
-  "gpt_j_residual": false, # false
+  "gpt_j_residual": false,
   "output_layer_parallelism": "column",
   #"attention-config": [[["flash"], "all"]],
   "scaled-upper-triang-masked-softmax-fusion": false,
@@ -109,7 +109,7 @@
   "lr-decay-style": "cosine",
   "warmup": 0.03,
   "checkpoint-factor": 50,
-  #"save_iters": [0, 500, 999],
+  # "save_iters": [0, 500, 999],
   # "extra-save-iters": [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
   "eval-interval": 400,
   "eval-iters": 10,
@@ -126,9 +126,9 @@
 
   # wandb
   "use_wandb": true,
-  #"wandb_host": "http://192.168.41.224",
-  "wandb_project": "neox_sft",
-  "wandb_group": "7b_sft_alpaca_gpt4_reset_mask_and_id",
+  # "wandb_host": "",
+  "wandb_project": "llama_sft",
+  "wandb_group": "7b_sft_alpaca_gpt4_reset_mask_and_id_global",
 
   # slurm
   "launcher": "slurm",
