@@ -179,7 +179,7 @@ def _fwd_kernel(
         # scale acc_o
         # acc_o_scale = tl.exp(m_i - m_ij)
         # Concat: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf'
-        acc_o_scale = tl.exp(m_i - _m_ij)
+        acc_o_scale = tl.exp(m_i - _m_ij) if BIAS_TYPE != 'none' else tl.exp(m_i - m_ij)
 
         # # -- update output accumulator --
         # BUG: have to store and immediately load
@@ -207,7 +207,7 @@ def _fwd_kernel(
         m_i = m_ij
         # l_i_new = tl.exp(lse_i - m_ij) + l_ij
         # Concat: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf'
-        l_i_new = tl.exp(lse_i - _m_ij) + l_ij 
+        l_i_new = tl.exp(lse_i - _m_ij) + l_ij if BIAS_TYPE != 'none' else tl.exp(lse_i - m_ij) + l_ij
         lse_i = m_ij + tl.log(l_i_new)
 
     # Padding: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf', store lse_i for bwd
