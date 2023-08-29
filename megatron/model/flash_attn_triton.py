@@ -169,7 +169,7 @@ def _fwd_kernel(
             m_ij = tl.maximum(tl.max(qk, 1), lse_i)
             # p = tl.exp(qk - m_ij[:, None]) 
             # Concat: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf'
-            _m_ij = tl.where(m_ij != float("-inf"), m_ij, torch.finfo(torch.float32).min)
+            _m_ij = tl.where(m_ij != float("-inf"), m_ij, -3.4028234663852886e+38) # torch.finfo(torch.float32).min
             p = tl.exp(qk - _m_ij[:, None])
         else:
             m_ij = tl.maximum(tl.max(qk, 1) * softmax_scale, lse_i)
@@ -211,7 +211,7 @@ def _fwd_kernel(
         lse_i = m_ij + tl.log(l_i_new)
 
     # Padding: Avoid '-inf - (-inf) = nan', instead '-inf-min_value = -inf', store lse_i for bwd
-    lse_i = tl.where(lse_i != float("-inf"), lse_i, torch.finfo(torch.float32).min)
+    lse_i = tl.where(lse_i != float("-inf"), lse_i, -3.4028234663852886e+38) # torch.finfo(torch.float32).min
     o_scale = tl.exp(m_i - lse_i)
     # BUG: have to store and immediately load
     tl.store(t_ptrs, o_scale)
