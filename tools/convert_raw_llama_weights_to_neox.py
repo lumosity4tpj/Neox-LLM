@@ -31,11 +31,12 @@ NUM_SHARDS = {
     "13B": 2,
     "30B": 4,
     "65B": 8,
+    "70B": 8,
 }
 
 
-def compute_intermediate_size(n):
-    return int(math.ceil(n * 8 / 3) + 255) // 256 * 256
+def compute_intermediate_size(n, ffn_dim_multiplier=1, multiple_of=256):
+    return multiple_of * ((int(ffn_dim_multiplier * int(8 * n / 3)) + multiple_of - 1) // multiple_of)
 
 
 def read_json(path):
@@ -73,8 +74,18 @@ def convert_model_pipeline(
     # base = 10000.0
     # inv_freq = 1.0 / (base ** (torch.arange(0, dims_per_head, 2).float() / dims_per_head))
 
+    if "n_kv_heads" in params:
+        num_key_value_heads = params["n_kv_heads"]  # for GQA / MQA
+        num_key_value_heads_per_input_shard = num_key_value_heads // num_input_shards
+        num_key_value_heads_per_output_shard = num_key_value_heads // num_input_shards
+    else:  # compatibility with other checkpoints
+        num_key_value_heads = num_heads
+        num_key_value_heads_per_input_shard = num_heads_per_input_shard
+        num_key_value_heads_per_output_shard = num_heads_per_output_shard
+
     def permute_rotary(w):
-        assert w.shape == (num_heads, dims_per_head, hidden_size)
+        # assert w.shape == (num_heads, dims_per_head, hidden_size)
+        num_heads, dims_per_head, hidden_size = w.shape
         return (
             w.view(num_heads, dims_per_head // 2, 2, hidden_size)
             .transpose(1, 2)
@@ -141,8 +152,12 @@ def convert_model_pipeline(
 
     # Layers
     if model_size == "7B":
-        rope_freqs = loaded[0]["layers.0.attention.inner_attention.rope.freqs"]
-        helper.del_loaded("layers.0.attention.inner_attention.rope.freqs")
+        if "layers.0.attention.inner_attention.rope.freqs" in loaded[0]:
+            rope_freqs = loaded[0]["layers.0.attention.inner_attention.rope.freqs"]
+            helper.del_loaded("layers.0.attention.inner_attention.rope.freqs")
+        else:
+            rope_freqs = loaded[0]["rope.freqs"]
+            helper.del_loaded("rope.freqs")
     else:
         rope_freqs = loaded[0]["rope.freqs"]
         helper.del_loaded("rope.freqs")
@@ -195,6 +210,7 @@ def convert_model_pipeline(
         helper.del_loaded(f"layers.{layer_i}.feed_forward.w3.weight")
 
         # Attention
+        # num_input_shards * [num_heads_per_input_shard, dims_per_head, hidden_size] -> [num_heads, dims_per_head, hidden_size]
         w_q = permute_rotary(
             torch.cat(
                 [
@@ -206,39 +222,47 @@ def convert_model_pipeline(
                 dim=0,
             )
         )
+        # num_input_shards * [num_key_value_heads_per_input_shard, dims_per_head, hidden_size] -> [num_key_value_heads, dims_per_head, hidden_size]
         w_k = permute_rotary(
             torch.cat(
                 [
                     loaded[rank][f"layers.{layer_i}.attention.wk.weight"].view(
-                        num_heads_per_input_shard, dims_per_head, hidden_size
+                        num_key_value_heads_per_input_shard, dims_per_head, hidden_size
                     )
                     for rank in range(num_input_shards)
                 ],
                 dim=0,
             )
         )
+        # num_input_shards * [num_key_value_heads_per_input_shard, dims_per_head, hidden_size] -> [num_key_value_heads, dims_per_head, hidden_size]
         w_v = torch.cat(
             [
                 loaded[rank][f"layers.{layer_i}.attention.wv.weight"].view(
-                    num_heads_per_input_shard, dims_per_head, hidden_size
+                    num_key_value_heads_per_input_shard, dims_per_head, hidden_size
                 )
                 for rank in range(num_input_shards)
             ],
             dim=0,
         )
-        sharded_qkv = torch.stack(
+        sharded_qkv = torch.cat(
             [
-                helper.shard(
-                    w_q, dim=0
-                ),  # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
-                helper.shard(w_k, dim=0),
-                helper.shard(w_v, dim=0),
+                helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
+                helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+                helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
             ],
-            dim=2,
-        )  # num_output_shards, num_heads_per_output_shard, QKV=3, dims_per_head, hidden_size
+            dim=1
+        )
+        # sharded_qkv = torch.stack(
+        #     [
+        #         helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
+        #         helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+        #         helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+        #     ],
+        #     dim=2,
+        # )  # num_output_shards, num_heads_per_output_shard, QKV=3, dims_per_head, hidden_size
         sharded_qkv = sharded_qkv.view(
             num_output_shards,
-            num_heads_per_output_shard * 3 * dims_per_head,
+            (num_heads_per_output_shard + 2 * num_key_value_heads_per_output_shard) * dims_per_head,
             hidden_size,
         )
         helper.del_loaded(f"layers.{layer_i}.attention.wq.weight")
@@ -307,9 +331,19 @@ def convert_model_sequential(
     dims_per_head = hidden_size // num_heads
     # base = 10000.0
     # inv_freq = 1.0 / (base ** (torch.arange(0, dims_per_head, 2).float() / dims_per_head))
+    
+    if "n_kv_heads" in params:
+        num_key_value_heads = params["n_kv_heads"]  # for GQA / MQA
+        num_key_value_heads_per_input_shard = num_key_value_heads // num_input_shards
+        num_key_value_heads_per_output_shard = num_key_value_heads // num_input_shards
+    else:  # compatibility with other checkpoints
+        num_key_value_heads = num_heads
+        num_key_value_heads_per_input_shard = num_heads_per_input_shard
+        num_key_value_heads_per_output_shard = num_heads_per_output_shard
 
     def permute_rotary(w):
-        assert w.shape == (num_heads, dims_per_head, hidden_size)
+        # assert w.shape == (num_heads, dims_per_head, hidden_size)
+        num_heads, dims_per_head, hidden_size = w.shape
         return (
             w.view(num_heads, dims_per_head // 2, 2, hidden_size)
             .transpose(1, 2)
@@ -368,13 +402,17 @@ def convert_model_sequential(
 
     # Layers
     if model_size == "7B":
-        rope_freqs = loaded[0]["layers.0.attention.inner_attention.rope.freqs"]
-        helper.del_loaded("layers.0.attention.inner_attention.rope.freqs")
+        if "layers.0.attention.inner_attention.rope.freqs" in loaded[0]:
+            rope_freqs = loaded[0]["layers.0.attention.inner_attention.rope.freqs"]
+            helper.del_loaded("layers.0.attention.inner_attention.rope.freqs")
+        else:
+            rope_freqs = loaded[0]["rope.freqs"]
+            helper.del_loaded("rope.freqs")
     else:
         rope_freqs = loaded[0]["rope.freqs"]
         helper.del_loaded("rope.freqs")
+    
     for layer_i in range(num_layers):
-
         # Linear
         attn_wo = helper.shard(
             torch.cat(
@@ -422,6 +460,7 @@ def convert_model_sequential(
         helper.del_loaded(f"layers.{layer_i}.feed_forward.w3.weight")
 
         # Attention
+        # num_input_shards * [num_heads_per_input_shard, dims_per_head, hidden_size] -> [num_heads, dims_per_head, hidden_size]
         w_q = permute_rotary(
             torch.cat(
                 [
@@ -433,39 +472,47 @@ def convert_model_sequential(
                 dim=0,
             )
         )
+        # num_input_shards * [num_key_value_heads_per_input_shard, dims_per_head, hidden_size] -> [num_key_value_heads, dims_per_head, hidden_size]
         w_k = permute_rotary(
             torch.cat(
                 [
                     loaded[rank][f"layers.{layer_i}.attention.wk.weight"].view(
-                        num_heads_per_input_shard, dims_per_head, hidden_size
+                        num_key_value_heads_per_input_shard, dims_per_head, hidden_size
                     )
                     for rank in range(num_input_shards)
                 ],
                 dim=0,
             )
         )
+        # num_input_shards * [num_key_value_heads_per_input_shard, dims_per_head, hidden_size] -> [num_key_value_heads, dims_per_head, hidden_size]
         w_v = torch.cat(
             [
                 loaded[rank][f"layers.{layer_i}.attention.wv.weight"].view(
-                    num_heads_per_input_shard, dims_per_head, hidden_size
+                    num_key_value_heads_per_input_shard, dims_per_head, hidden_size
                 )
                 for rank in range(num_input_shards)
             ],
             dim=0,
         )
-        sharded_qkv = torch.stack(
+        sharded_qkv = torch.cat(
             [
-                helper.shard(
-                    w_q, dim=0
-                ),  # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
-                helper.shard(w_k, dim=0),
-                helper.shard(w_v, dim=0),
+                helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
+                helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+                helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
             ],
-            dim=2,
-        )  # num_output_shards, num_heads_per_output_shard, QKV=3, dims_per_head, hidden_size
+            dim=1,
+        )
+        # sharded_qkv = torch.stack(
+        #     [
+        #         helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
+        #         helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+        #         helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+        #     ],
+        #     dim=2,
+        # )  # num_output_shards, num_heads_per_output_shard, QKV=3, dims_per_head, hidden_size
         sharded_qkv = sharded_qkv.view(
             num_output_shards,
-            num_heads_per_output_shard * 3 * dims_per_head,
+            (num_heads_per_output_shard + 2 * num_key_value_heads_per_output_shard) * dims_per_head,
             hidden_size,
         )
         helper.del_loaded(f"layers.{layer_i}.attention.wq.weight")

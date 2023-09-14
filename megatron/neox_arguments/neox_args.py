@@ -111,6 +111,21 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Number of transformer attention heads.
     """
 
+    num_key_value_heads: int = None
+    """
+    Number of transformer key_value heads.
+    """
+
+    ffn_dim_multiplier: float = 1.0
+    """
+    Multiple of ffn dim.
+    """
+
+    multiple_of: int = 256
+    """
+    Make SwiGLU hidden layer size multiple of large power of 2.
+    """
+
     seq_length: int = None
     """
     Maximum sequence length to process.

@@ -151,17 +151,15 @@ class LLaMAParallelMLP(nn.Module):
         init_method,
         output_layer_init_method,
         parallel_output=False,
-        multiple_of=256,
     ):
         super().__init__()
 
         self.activation_func = get_activation(neox_args)
         self.activation_type = neox_args.activation
 
-        self.multiple_of = multiple_of
-
         ff_dim = int(2 * neox_args.hidden_size * 4 / 3)
-        ff_dim = self.multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
+        ff_dim = int(neox_args.ffn_dim_multiplier * ff_dim)
+        ff_dim = neox_args.multiple_of * ((ff_dim + neox_args.multiple_of - 1) // neox_args.multiple_of)
         self.w1 = mpu.ColumnParallelLinear(
             neox_args=neox_args,
             input_size=neox_args.hidden_size,
@@ -243,6 +241,19 @@ class ParallelLinear(nn.Module):
         return self.final_linear(hidden_states)
 
 
+# copied from https://github.com/facebookresearch/llama/blob/main/llama/model.py
+def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
+    bs, slen, n_kv_heads, head_dim = x.shape
+    if n_rep == 1:
+        return x
+    return (
+        x[:, :, :, None, :]
+        .expand(bs, slen, n_kv_heads, n_rep, head_dim)
+        .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
+    )
+
+
 class ParallelSelfAttention(nn.Module):
     """Parallel self-attention layer abstract class.
 
@@ -283,12 +294,17 @@ class ParallelSelfAttention(nn.Module):
             neox_args.num_attention_heads, world_size
         )
         self.pos_emb = neox_args.pos_emb
-
+        self.num_key_value_heads = neox_args.num_key_value_heads
+        self.num_key_value_heads_per_partition = mpu.divide(
+            neox_args.num_key_value_heads, world_size
+        )
+        # self.num_key_value_groups = neox_args.num_attention_heads // neox_args.num_key_value_heads
+        self.num_key_value_groups = mpu.divide(neox_args.num_attention_heads, neox_args.num_key_value_heads)
         # Strided linear layer.
         self.query_key_value = mpu.ColumnParallelLinear(
             neox_args=neox_args,
             input_size=neox_args.hidden_size,
-            output_size=3 * neox_args.hidden_size,
+            output_size=neox_args.hidden_size + 2 * self.hidden_size_per_attention_head * self.num_key_value_heads, # if not GQA, then num_key_value_heads == num_attention_heads
             gather_output=False,
             init_method=init_method,
             bias=neox_args.use_bias_in_attn_linear,
@@ -658,20 +674,26 @@ class ParallelSelfAttention(nn.Module):
         # Query, Key, and Value
         # =====================
 
-        # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
+        # Attention heads [sq, b, h] --> [sq, b, (npq * hn + 2 * npkv * hn)]
         mixed_x_layer, _ = self.query_key_value(hidden_states)
-
-        # [sq, b, (np * 3 * hn)] --> [sq, b, np, 3 * hn]
+        # [sq, b, (npq * hn)] --> [sq, b, npq, hn]
         new_tensor_shape = mixed_x_layer.size()[:-1] + (
             self.num_attention_heads_per_partition,
-            3 * self.hidden_size_per_attention_head,
+            self.hidden_size_per_attention_head,
         )
-        mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
-
-        # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
-        (query_layer, key_layer, value_layer) = mpu.split_tensor_along_last_dim(
-            mixed_x_layer, 3
+        query_layer = mixed_x_layer[:, :, :self.num_attention_heads_per_partition * self.hidden_size_per_attention_head].view(*new_tensor_shape)
+        # [sq, b, (2 * npkv * hn)] --> [sq, b, npkv, 2 * hn]
+        new_tensor_shape = mixed_x_layer.size()[:-1] + (
+            self.num_key_value_heads_per_partition,
+            2 * self.hidden_size_per_attention_head,
         )
+        mixed_x_layer = mixed_x_layer[:, :, self.num_attention_heads_per_partition * self.hidden_size_per_attention_head:].view(*new_tensor_shape)
+        # [sq, b, npkv, 2 * hn] --> 2 [sq, b, npkv, hn]
+        (key_layer, value_layer) = mpu.split_tensor_along_last_dim(
+            mixed_x_layer, 2
+        )
+        key_layer = repeat_kv(key_layer, self.num_key_value_groups)
+        value_layer = repeat_kv(value_layer, self.num_key_value_groups)
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
