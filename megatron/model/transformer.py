@@ -294,12 +294,12 @@ class ParallelSelfAttention(nn.Module):
             neox_args.num_attention_heads, world_size
         )
         self.pos_emb = neox_args.pos_emb
-        self.num_key_value_heads = neox_args.num_key_value_heads
+        self.num_key_value_heads = neox_args.num_key_value_heads if neox_args.num_key_value_heads else neox_args.num_attention_heads
         self.num_key_value_heads_per_partition = mpu.divide(
-            neox_args.num_key_value_heads, world_size
+            self.num_key_value_heads, world_size
         )
         # self.num_key_value_groups = neox_args.num_attention_heads // neox_args.num_key_value_heads
-        self.num_key_value_groups = mpu.divide(neox_args.num_attention_heads, neox_args.num_key_value_heads)
+        self.num_key_value_groups = mpu.divide(neox_args.num_attention_heads, self.num_key_value_heads)
         # Strided linear layer.
         self.query_key_value = mpu.ColumnParallelLinear(
             neox_args=neox_args,
@@ -692,8 +692,8 @@ class ParallelSelfAttention(nn.Module):
         (key_layer, value_layer) = mpu.split_tensor_along_last_dim(
             mixed_x_layer, 2
         )
-        key_layer = repeat_kv(key_layer, self.num_key_value_groups)
-        value_layer = repeat_kv(value_layer, self.num_key_value_groups)
+        key_layer = repeat_kv(key_layer, self.num_key_value_groups).contiguous()
+        value_layer = repeat_kv(value_layer, self.num_key_value_groups).contiguous()
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
