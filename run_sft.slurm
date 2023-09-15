@@ -1,15 +1,3 @@
-
-
-###
- # @Author       : Tang Peijun
- # @LastEditors  : Tang Peijun
- # @Date         : 2023-08-16 19:30:37
- # @LastEditTime : 2023-09-15 14:45:05
- # @Email        : tangpeijung@idea.edu.cn
- # @FilePath     : run_sft.slurm
- # @Environment  : Python 3.8
- # @Description  : 
-### 
 #!/bin/bash
 #SBATCH --job-name=neox # create a short name for your job
 #SBATCH -p batch
