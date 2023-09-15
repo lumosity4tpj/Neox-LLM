@@ -676,24 +676,37 @@ class ParallelSelfAttention(nn.Module):
 
         # Attention heads [sq, b, h] --> [sq, b, (npq * hn + 2 * npkv * hn)]
         mixed_x_layer, _ = self.query_key_value(hidden_states)
-        # [sq, b, (npq * hn)] --> [sq, b, npq, hn]
-        new_tensor_shape = mixed_x_layer.size()[:-1] + (
-            self.num_attention_heads_per_partition,
-            self.hidden_size_per_attention_head,
-        )
-        query_layer = mixed_x_layer[:, :, :self.num_attention_heads_per_partition * self.hidden_size_per_attention_head].view(*new_tensor_shape)
-        # [sq, b, (2 * npkv * hn)] --> [sq, b, npkv, 2 * hn]
-        new_tensor_shape = mixed_x_layer.size()[:-1] + (
-            self.num_key_value_heads_per_partition,
-            2 * self.hidden_size_per_attention_head,
-        )
-        mixed_x_layer = mixed_x_layer[:, :, self.num_attention_heads_per_partition * self.hidden_size_per_attention_head:].view(*new_tensor_shape)
-        # [sq, b, npkv, 2 * hn] --> 2 [sq, b, npkv, hn]
-        (key_layer, value_layer) = mpu.split_tensor_along_last_dim(
-            mixed_x_layer, 2
-        )
-        key_layer = repeat_kv(key_layer, self.num_key_value_groups).contiguous()
-        value_layer = repeat_kv(value_layer, self.num_key_value_groups).contiguous()
+        if self.num_key_value_groups == 1:
+            # no GQA: stack qkv [0, 2, 4 , 1, 3, 5] => [0, 1, | 2, 3, | 4, 5]
+            # [sq, b, (np * 3 * hn)] --> [sq, b, np, 3 * hn]
+            new_tensor_shape = mixed_x_layer.size()[:-1] + (
+                self.num_attention_heads_per_partition,
+                3 * self.hidden_size_per_attention_head,
+            )
+            # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
+            (query_layer, key_layer, value_layer) = mpu.split_tensor_along_last_dim(
+                mixed_x_layer.view(*new_tensor_shape), 3
+            )
+        else:
+            # GQA: cat qkv [0, 1, 2, 4] => [0, 1, | 2, | 4]
+            # [sq, b, (npq * hn)] --> [sq, b, npq, hn]
+            new_tensor_shape = mixed_x_layer.size()[:-1] + (
+                self.num_attention_heads_per_partition,
+                self.hidden_size_per_attention_head,
+            )
+            query_layer = mixed_x_layer[:, :, :self.num_attention_heads_per_partition * self.hidden_size_per_attention_head].view(*new_tensor_shape)
+            # [sq, b, (2 * npkv * hn)] --> [sq, b, npkv, 2 * hn]
+            new_tensor_shape = mixed_x_layer.size()[:-1] + (
+                self.num_key_value_heads_per_partition,
+                2 * self.hidden_size_per_attention_head,
+            )
+            mixed_x_layer = mixed_x_layer[:, :, self.num_attention_heads_per_partition * self.hidden_size_per_attention_head:].view(*new_tensor_shape)
+            # [sq, b, npkv, 2 * hn] --> 2 [sq, b, npkv, hn]
+            (key_layer, value_layer) = mpu.split_tensor_along_last_dim(
+                mixed_x_layer, 2, contiguous_split_chunks=True
+            )
+            key_layer = repeat_kv(key_layer, self.num_key_value_groups)
+            value_layer = repeat_kv(value_layer, self.num_key_value_groups)
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):

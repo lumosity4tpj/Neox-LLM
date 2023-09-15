@@ -105,6 +105,7 @@ def convert_model_pipeline(
         )
         pbar.set_description(f"Loaded shard {i}/{num_input_shards}")
         pbar.update(1)
+
     helper = Helper(
         loaded=loaded,
         model_path=model_path,
@@ -112,8 +113,6 @@ def convert_model_pipeline(
         model_size=model_size,
         pipeline_parallel=False,
     )
-
-    sequential_cache = [{} for _ in range(num_output_shards)]
 
     # Embedding in
     embeddings_in = torch.cat(
@@ -244,22 +243,26 @@ def convert_model_pipeline(
             ],
             dim=0,
         )
-        sharded_qkv = torch.cat(
-            [
-                helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
-                helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
-                helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
-            ],
-            dim=1
-        )
-        # sharded_qkv = torch.stack(
-        #     [
-        #         helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
-        #         helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
-        #         helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
-        #     ],
-        #     dim=2,
-        # )  # num_output_shards, num_heads_per_output_shard, QKV=3, dims_per_head, hidden_size
+
+        if num_key_value_heads == num_heads:
+            sharded_qkv = torch.cat(
+                [
+                    helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
+                    helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+                    helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+                ],
+                dim=1
+            )
+        else:
+            sharded_qkv = torch.stack(
+                [
+                    helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
+                    helper.shard(w_k, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+                    helper.shard(w_v, dim=0), # num_output_shards, num_key_value_heads_per_output_shard, dims_per_head, hidden_size
+                ],
+                dim=2,
+            )  # num_output_shards, num_heads_per_output_shard, QKV=3, dims_per_head, hidden_size
+        
         sharded_qkv = sharded_qkv.view(
             num_output_shards,
             (num_heads_per_output_shard + 2 * num_key_value_heads_per_output_shard) * dims_per_head,
