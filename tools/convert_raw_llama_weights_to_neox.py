@@ -244,7 +244,7 @@ def convert_model_pipeline(
             dim=0,
         )
 
-        if num_key_value_heads == num_heads:
+        if num_key_value_heads != num_heads:
             sharded_qkv = torch.cat(
                 [
                     helper.shard(w_q, dim=0), # num_output_shards, num_heads_per_output_shard, dims_per_head, hidden_size
@@ -302,7 +302,7 @@ def convert_model_pipeline(
     model_state = {
         "dp_world_size": 1,
         "mp_world_size": num_output_shards,
-        "module": {},
+        "module": None,
         "optimizer": {},
         "global_steps": 1,
         "skipped_steps": 1,
@@ -598,7 +598,7 @@ class Helper:
             )
 
     def save(self, obj, layer_i, rank):
-        torch.save(obj, self.save_path(layer_i=layer_i + 2, rank=rank))
+        torch.save(obj, self.save_path(layer_i=layer_i, rank=rank))
 
     def shard(self, x, dim):
         x_shape = list(x.shape)
@@ -646,7 +646,7 @@ def main():
     )
     parser.add_argument(
         "--model_size",
-        choices=["7B", "13B", "30B", "65B", "tokenizer_only"],
+        choices=["7B", "13B", "30B", "65B", "70B", "tokenizer_only"],
     )
     parser.add_argument(
         "--output_dir",
