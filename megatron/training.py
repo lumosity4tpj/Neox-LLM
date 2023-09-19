@@ -273,7 +273,12 @@ def pretrain(neox_args):
 
 def _get_batch(neox_args, tokenizer, keys, data, datatype):
     """Support function for get_batch / get_batch pipe (to avoid code repetition)"""
-    data_b = mpu.broadcast_data(keys, data, datatype)
+    try:
+        data_b = mpu.broadcast_data(keys, data, datatype)
+    except:
+        # for generate, only the text
+        keys = ["text"]
+        data_b = mpu.broadcast_data(keys, data, datatype)
 
     # Unpack.
     tokens_ = data_b["text"].long()
@@ -287,10 +292,16 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
         labels = tokens_[:, 1:].contiguous()
     tokens = tokens_[:, :-1].contiguous()
 
-    sentence_ids = data_b["sentence_id"].long()
-    sentence_ids = sentence_ids[:, :-1].contiguous()
-    position_ids = data_b["position_id"].long()
-    position_ids = position_ids[:, :-1].contiguous()
+    if "sentence_id" in data_b:
+        sentence_ids = data_b["sentence_id"].long()
+        sentence_ids = sentence_ids[:, :-1].contiguous()
+    else:
+        sentence_ids = None
+    if "position_id" in data_b:
+        position_ids = data_b["position_id"].long()
+        position_ids = position_ids[:, :-1].contiguous()
+    else:
+        position_ids = None
 
     # Get the masks and position ids.
     attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(

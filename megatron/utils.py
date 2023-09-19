@@ -78,10 +78,10 @@ def get_attn_mask(seq_length, device):
 
 def get_ltor_masks_and_position_ids(
     data,
-    sentence_ids,
-    position_ids,
     eod_token,
     eod_mask_loss=False,
+    sentence_ids=None,
+    position_ids=None,
     reset_attention_mask=False,
     reset_position_ids=False,
 ):
@@ -89,7 +89,7 @@ def get_ltor_masks_and_position_ids(
     batch_size, seq_length = data.size()
 
     # Attention mask (lower triangular).
-    if reset_attention_mask:
+    if reset_attention_mask and sentence_ids is not None:
         attention_mask = get_attn_mask(seq_length, data.device)
         mask = sentence_ids.repeat(1, seq_length).view(-1, seq_length, seq_length).unsqueeze(1)
         mask = mask == mask.permute((0, 1, 3, 2))
@@ -106,7 +106,7 @@ def get_ltor_masks_and_position_ids(
         loss_mask[data == eod_token] = 0.0
 
     # Position ids.
-    if reset_position_ids:
+    if reset_position_ids and position_ids is not None:
         position_ids = position_ids
     else:
         position_ids = torch.arange(seq_length, dtype=torch.long, device=data.device)
