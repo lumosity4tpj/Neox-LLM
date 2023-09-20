@@ -77,7 +77,7 @@ def convert_model_pipeline(
     if "n_kv_heads" in params:
         num_key_value_heads = params["n_kv_heads"]  # for GQA / MQA
         num_key_value_heads_per_input_shard = num_key_value_heads // num_input_shards
-        num_key_value_heads_per_output_shard = num_key_value_heads // num_input_shards
+        num_key_value_heads_per_output_shard = num_key_value_heads // num_output_shards
     else:  # compatibility with other checkpoints
         num_key_value_heads = num_heads
         num_key_value_heads_per_input_shard = num_heads_per_input_shard
