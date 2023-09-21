@@ -1,0 +1,158 @@
+{
+  # Tokenizer /  checkpoint settings - you will need to change these to the location you have them saved in
+  "vocab_file": "./vocab_file/tokenizer.model",
+  "save": "./model/sft/llama2/70B/alpaca_gpt4_reset_mask_global",
+  "load": "./model/pretrain/llama2/70B/",
+
+  # If finetuning, edit the following to the location of your finetuning dataset:
+  "data_path": "./data/sft/alpaca_gpt4/alpaca_text_document", #
+  "label_data_paths": ["./data/sft/alpaca_gpt4/alpaca_label_document"],
+
+  "finetune": true,
+  "eod_mask_loss": true,
+  "reset_attention_mask": true,
+  "reset_position_ids": false,
+
+  # parallelism settings ( you will want to change these based on your cluster setup, ideally scheduling pipeline stages
+  # across the node boundaries )
+  "pipe-parallel-size": 4,
+  "model-parallel-size": 8,
+  "global_num_gpus": 32,
+  "pipe_partition_method": "parameters",
+  "make_vocab_size_divisible_by": 1,
+
+  # model settings
+  "num-layers": 80,
+  "hidden-size": 8192,
+  "num-attention-heads": 64,
+  "num_key_value_heads": 8,
+  "ffn_dim_multiplier": 1.3,
+  "multiple_of": 4096,
+  "seq-length": 4096,
+  "max-position-embeddings": 4096,
+  "norm": "rmsnorm",
+  "rms_norm_epsilon": 1.0e-5,
+  "pos-emb": "rotary",
+  # "rotary_learnable": false,
+  "rotary_pct": 1.0,
+  "no-weight-tying": true,
+  "gpt_j_residual": false,
+  "output_layer_parallelism": "column",
+  #"attention-config": [[["flash"], "all"]],
+  "scaled-upper-triang-masked-softmax-fusion": false,
+  "scaled_masked_softmax_fusion": true,  
+  "bias-gelu-fusion": false,
+  "use_bias_in_norms": false,
+  "use_bias_in_attn_linear": false,
+  "mlp_type": "llama",
+  "activation": "silu",
+
+  # init methods
+  "init_method": "small_init",
+  "output_layer_init_method": "wang_init",
+
+  # optimizer settings
+  "optimizer": {
+    "type": "cpu_adam",
+    "params": {
+      "lr": 0.00002,
+      "betas": [0.9, 0.95],
+      "eps": 1.0e-8
+    }
+  },
+
+  "min_lr": 0.0,
+
+  # for all zero_optimization options, see https://www.deepspeed.ai/docs/config-json/#zero-optimizations-for-fp16-training
+  "zero_optimization": {
+    "stage": 1,
+    "allgather_partitions": true,
+    "allgather_bucket_size": 1260000000,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 1260000000,
+    "contiguous_gradients": true,
+    #"cpu_offload": true,
+    "offload_optimizer": {
+       "device": "cpu",
+       "pin_memory": true
+    },
+    "load_from_fp32_weights": False, # if checkpoint has fp16 / bf16 params
+  },
+
+  # batch / data settings (assuming 96 GPUs)
+  "train_micro_batch_size_per_gpu": 1,
+  "gradient_accumulation_steps": 64,
+  "data-impl": "mmap",
+  "split": "1000,0,0",
+
+  # activation checkpointing
+  "checkpoint-activations": true,
+  "checkpoint-num-layers": 1,
+  "partition-activations": true,
+  "synchronize-each-layer": true,
+
+  # regularization
+  "gradient_clipping": 0.0,
+  "weight-decay": 0.0,
+  "hidden-dropout": 0,
+  "attention-dropout": 0,
+
+  # precision settings
+  #"precision": "bfloat16",
+  #"bf16": {
+  #  "enabled": true,
+  #},
+  #"fp32_allreduce": true, # without a patch to torch, bf16 models have to do the allreduce in fp32
+  #"gradient_accumulation_dtype":"fp32",
+  #"data_types": {"grad_accum_dtype": "fp32"},
+  
+  "fp16": {
+    "fp16": true,
+    "enabled": true,
+    "loss_scale": 0,
+    "loss_scale_window": 1000,
+    "initial_scale_power": 12,
+    "hysteresis": 2,
+    "min_loss_scale": 1
+    },
+
+  # misc. training settings
+  "train-iters": 200,
+  # "lr-decay-iters": 6100, # if none, = train-iters
+  "distributed-backend": "nccl",
+  "lr-decay-style": "cosine",
+  "warmup": 0.03,
+  "checkpoint-factor": 50,
+  # "save_iters": [0, 500, 999],
+  # "extra-save-iters": [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
+  "eval-interval": 400,
+  "eval-iters": 10,
+
+  # logging
+  "log-interval": 10,
+  "steps_per_print": 1,
+  "wall_clock_breakdown": true,
+
+  ### NEW DATA: ####
+  "tokenizer_type": "SPMTokenizer",
+  "tensorboard-dir": "./tensorboard",
+  "log_dir": "./logs",
+
+  # wandb
+  "use_wandb": true,
+  # "wandb_host": "",
+  "wandb_project": "llama2_sft",
+  "wandb_group": "70b_sft_alpaca_gpt4_reset_mask_global",
+
+  # slurm
+  "launcher": "slurm",
+  "master_port": 11503,
+  "deepspeed_slurm": true,
+  "comment": "neox",
+  #"slurm_comment": "neox",
+  "include": "",   # "localhost:0,1,2,3,4,5,6,7"
+  "lazy_mpu_init": false,
+  "hostfile": "./hostfile",
+  "no_ssh_check": true,
+}
