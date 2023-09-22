@@ -1,7 +1,7 @@
 # Enhancements and Differences from GPTNeox
 This README outlines the key changes and additions made in this repository compared to the `GPTNeox`. Our aim is to maintain transparency about the updates and improvements made to the original codebase.
 
-- Add data processing of sft, dataset splicing mode and fix some bugs.
+- Add data processing of sft (support `alpaca (single-round) && sharegpt (multi-round)`), dataset splicing mode and fix some bugs.
 
 - Add `reset_mask` and `reset_id` to see if you can see the front when splicing, and reset the position id (`reset_mask` can currently only use `global attention` and `flash attention triton`).
 
@@ -12,7 +12,6 @@ This README outlines the key changes and additions made in this repository compa
 # To-Do List
 
 - Address the reset mask functionality in flash attention.
-- Implement data processing for multi-round dialog data.
 - Add NTK.
 - some issue: bf16 + zero stage 1 + cpu offload.
 
@@ -21,10 +20,13 @@ This README outlines the key changes and additions made in this repository compa
 
 ## prepare sft data
 
-It is currently only tested on `alpaca` data.
+It is currently only tested on `alpaca, sharegpt` data，`alpaca` is a single-round dialogue, `sharegpt` is a multi-round dialogue, which can be referred to.
 
 ```bash
 python prepare_data_sft.py -d ./data/sft/alpaca_gpt4 -i ./data/raw_data/alpaca_gpt4 -t SPMTokenizer -v ./vocab_file/tokenizer.model alpaca_gpt4
+
+python prepare_data_sft.py -d ./data/sft/sharegpt -i ./data/raw_data/sharegpt -t SPMTokenizer -v ./vocab_file/tokenizer.model sharegpt
+
 ```
 Then generate the corresponding `.bin` file and `.idx` file for `text` and `label`, respectively.
 
