@@ -179,6 +179,12 @@ def get_args():
         type=str,
     )
     group.add_argument(
+        "--mask-split-text",
+        default=None,
+        help="a separator used for multiple conversation.",
+        type=str,
+    )
+    group.add_argument(
         "--num-docs",
         default=None,
         help="Optional: Number of documents in the input data (if known) for an accurate progress bar.",
@@ -274,15 +280,18 @@ def yield_from_files(fnames: list, semaphore):
         yield from yielder(fname, semaphore)
 
 
-def mask(sentence: list, pivot_tokens: list, include_pivot=True):
+def mask(sentence: list, pivot_tokens: list, split_tokens: list, include_pivot=True):
     inds = kmp(sentence, pivot_tokens)
     if not inds:
         return sentence
-    index = inds[0]
-    if include_pivot:
-        index += len(pivot_tokens)
-
-    return [-100] * index + sentence[index:]
+    mask_sentence = [-100] * len(sentence)
+    split_inds = kmp(sentence, split_tokens) if split_tokens else []
+    split_inds += [len(sentence)]
+    for start_index, end_index in zip(inds, split_inds):
+        if include_pivot:
+            start_index += len(pivot_tokens)
+        mask_sentence[start_index: end_index] = sentence[start_index: end_index]
+    return mask_sentence
 
 
 def main():
@@ -314,6 +323,10 @@ def main():
     else:
         token_mask = []
 
+    if args.mask_split_text is not None:
+        split_token_mask = tokenizer.tokenize(args.mask_split_text)
+    else:
+        split_token_mask = []
 
     # make a dataset builder for each key in args.jsonl_keys
     # each key will output to a different file beginning with args.output_prefix
@@ -366,7 +379,7 @@ def main():
             for sentence in sentences:
                 builders[key].add_item(np.array(sentence, dtype=builders[key].dtype))
                 if token_mask:
-                    masked_sentence = mask(sentence, token_mask, include_pivot=args.include_pivot)
+                    masked_sentence = mask(sentence, token_mask, split_token_mask, include_pivot=args.include_pivot)
                     builders["label"].add_item(np.array(masked_sentence, dtype=builders["text"].dtype))
             # separate with eos token
             builders[key].end_document()

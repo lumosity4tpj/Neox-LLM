@@ -14,7 +14,7 @@ TOKENIZER_CHOICES = [
     "SPMTokenizer",
 ]
 
-DATASET_CHOICES = ["alpaca_gpt4", "alpaca_gpt3"]
+DATASET_CHOICES = ["alpaca_gpt4", "sharegpt"]
 def get_args():
     parser = argparse.ArgumentParser(description="prepare finetune data")
     parser.add_argument(
@@ -89,13 +89,19 @@ class DataBase:
     @property
     @abstractmethod
     def mask_before_text(self):
-        """prompt dict"""
+        """apply loss masks before certain text(s)"""
+        pass
+
+    @property
+    @abstractmethod
+    def mask_split_text(self):
+        """a separator used for multiple conversation"""
         pass
 
     @property
     @abstractmethod
     def include_pivot(self):
-        """prompt dict"""
+        """whether mask include pivot"""
         pass
 
     def convert_data(self):
@@ -114,14 +120,15 @@ class DataBase:
             --workers {self.num_workers} \
             --mask-before-text '{self.mask_before_text}' "
         
+        if self.mask_split_text:
+            cmd += f"--mask-split-text '{self.mask_split_text}' "
+
         if self.include_pivot:
             cmd += f"--include-pivot "
         
         if self.ftfy:
             cmd += f"--ftfy "
 
-        #cmd += f"--mask-before-text '{self.mask_before_text}'"
-        #print("cmd:", cmd)
         os.system(cmd)
 
     def prepare(self):
@@ -144,6 +151,7 @@ class Alpaca(DataBase):
         ),
     }
     mask_before_text = "Response:\n"
+    mask_split_text = None
     include_pivot = True
 
     def convert_data(self):
@@ -156,12 +164,47 @@ class Alpaca(DataBase):
                         info = json.loads(line.strip())
                         if "instruction" not in info and "output" not in info:
                             continue
-                        # instruction, input, output = info["instruction"], info["input"], info["output"]
                         text = prompt_input.format_map(info) if info.get("input", "") != "" else prompt_no_input.format_map(info)
-                        # label = info["output"]
                         data = {
                             "text": text,
-                            #"label": label, # not use
+                        }
+                        f.write(f"{json.dumps(data)}\n")
+                        f.flush()
+
+
+class ShareGPT(DataBase):
+    name = "sharegpt"
+    prompt_dict = {
+        "system": (
+            "A chat between a curious user and an artificial intelligence assistant. "
+            "The assistant gives helpful, detailed, and polite answers to the user's questions."
+        ),
+    }
+    mask_before_text = "ASSISTANT: "
+    mask_split_text = "</s>"
+    include_pivot = True
+
+    def convert_data(self):
+        prompt = self.prompt_dict["system"]
+        with open(self.tmp_file, "wt") as f:
+            for input_path in os.listdir(self.input_data_dir):
+                ext = os.path.basename(input_path).split(".")[-1]
+                assert ext == "json"
+                input_json = json.load(open(self.input_data_dir + '/' + input_path, "rt"))
+                for info in tqdm(input_json):
+                    info = info["conversations"]
+                    text = prompt + "\n"
+                    for (chat) in info:
+                        role, message = chat["from"], chat["value"]
+                        if role == "human":
+                            text += "USER: " + message + "\n"
+                        elif role == "gpt":
+                            text += "ASSISTANT: " + message + "\n" + self.mask_split_text
+                        else:
+                            break
+                    else:
+                        data = {
+                            "text": text
                         }
                         f.write(f"{json.dumps(data)}\n")
                         f.flush()
@@ -169,6 +212,7 @@ class Alpaca(DataBase):
 
 DATA_DATALOADERS = {
     "alpaca_gpt4": Alpaca,
+    "sharegpt": ShareGPT,
 }
 
 def prepare_dataset(

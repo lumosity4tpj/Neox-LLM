@@ -116,7 +116,6 @@ def write_model(model_path, input_base_path, model_size):
             layer_i + 1,
             n_layers + 1,
         )
-        # torch.cat([loaded[i]["attention.query_key_value.weight"].view(-1, dims_per_head, dim) for i in range(num_shards)], dim=0)
         if num_key_value_heads != n_heads:
             query_key_value_weight = [loaded[i]["attention.query_key_value.weight"].view(-1, dims_per_head, dim) for i in range(num_shards)]
             query_weight = torch.cat([query_key_value_weight[i][:num_heads_per_input_shard, :, :].reshape(-1, dim) for i in range(num_shards)], dim=0)
@@ -183,6 +182,7 @@ def write_model(model_path, input_base_path, model_size):
         num_hidden_layers=params["n_layers"],
         rms_norm_eps=params["norm_eps"],
         num_key_value_heads=num_key_value_heads,
+        pad_token_id=0,
         vocab_size=vocab_size,
         rope_theta=base,
         max_position_embeddings=max_position_embeddings,
@@ -203,7 +203,7 @@ def write_model(model_path, input_base_path, model_size):
     model.save_pretrained(model_path, safe_serialization=True)
     tokenier = LlamaTokenizer.from_pretrained(tokenizer_path)
     tokenier.save_pretrained(model_path)
-    # shutil.rmtree(tmp_model_path)
+    shutil.rmtree(tmp_model_path)
 
 
 def main():
