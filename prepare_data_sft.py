@@ -193,13 +193,13 @@ class ShareGPT(DataBase):
                 input_json = json.load(open(self.input_data_dir + '/' + input_path, "rt"))
                 for info in tqdm(input_json):
                     info = info["conversations"]
-                    text = prompt + "\n"
+                    text = prompt + " "
                     for (chat) in info:
                         role, message = chat["from"], chat["value"]
                         if role == "human":
-                            text += "USER: " + message + "\n"
+                            text += "USER: " + message + " "
                         elif role == "gpt":
-                            text += "ASSISTANT: " + message + "\n" + self.mask_split_text
+                            text += "ASSISTANT: " + message + self.mask_split_text
                         else:
                             break
                     else:
