@@ -95,6 +95,7 @@ class GPT2Dataset(torch.utils.data.Dataset):
                 position_ids = []
                 i = 0
                 if doc_index_f == doc_index_l:
+                    # only used in pretrain, offset_f != offset_l
                     samples.append(dataset.get(
                         self.doc_idx[doc_index_f],
                         offset=offset_f,
@@ -114,15 +115,19 @@ class GPT2Dataset(torch.utils.data.Dataset):
                         sample_list.append(dataset.get(self.doc_idx[i]))
                         sentence_ids += [i] * sample_list[-1].shape[0]
                         position_ids += list(range(sample_list[-1].shape[0]))
-                    # And finally add the relevant portion of last document.
-                    sample_list.append(
-                        dataset.get(
-                            self.doc_idx[doc_index_l], length=offset_l + 1
+                    # avoid the next token of offset_f != offset_l
+                    if offset_l == 0:
+                        samples.append(np.concatenate(sample_list))
+                    else:
+                        # And finally add the relevant portion of last document.
+                        sample_list.append(
+                            dataset.get(
+                                self.doc_idx[doc_index_l], length=offset_l + 1
+                            )
                         )
-                    )
-                    sentence_ids += [doc_index_l] * sample_list[-1].shape[0]
-                    position_ids += list(range(sample_list[-1].shape[0]))
-                    samples.append(np.concatenate(sample_list))
+                        sentence_ids += [doc_index_l] * sample_list[-1].shape[0]
+                        position_ids += list(range(sample_list[-1].shape[0]))
+                        samples.append(np.concatenate(sample_list))
                 # padding using pad_token
                 padding_length = max(self.seq_length + 1 - samples[-1].shape[0], 0)
                 #print("padding_length", padding_length)
