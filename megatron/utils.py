@@ -91,9 +91,10 @@ def get_ltor_masks_and_position_ids(
     # Attention mask (lower triangular).
     if reset_attention_mask and sentence_ids is not None:
         attention_mask = get_attn_mask(seq_length, data.device)
-        mask = sentence_ids.repeat(1, seq_length).view(-1, seq_length, seq_length).unsqueeze(1)
-        mask = mask == mask.permute((0, 1, 3, 2))
-        attention_mask = ~(~attention_mask & mask)
+        sentence_ids = sentence_ids.repeat(1, seq_length).view(-1, seq_length, seq_length).unsqueeze(1)
+        padding_mask = sentence_ids.permute(0, 1, 3, 2) == -1
+        mask = sentence_ids == sentence_ids.permute((0, 1, 3, 2))
+        attention_mask = ~(~attention_mask & mask) | padding_mask
     else:
         attention_mask = get_attn_mask(
             seq_length=seq_length,
