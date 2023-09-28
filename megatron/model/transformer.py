@@ -541,7 +541,7 @@ class ParallelSelfAttention(nn.Module):
 
         return matmul_result
 
-    def flash_attention(self, query_layer, key_layer, value_layer):
+    def flash_attention(self, query_layer, key_layer, value_layer, attention_mask=None):
         # [b, np, sq, sk]
         output_size = (
             query_layer.size(1),
@@ -564,21 +564,33 @@ class ParallelSelfAttention(nn.Module):
             max_seqlen_q = output_size[2]
             max_seqlen_k = output_size[3]
 
-            cu_seqlens_q = torch.arange(
-                0,
-                (batch_size + 1) * max_seqlen_q,
-                step=max_seqlen_q,
-                dtype=torch.int32,
-                device=query_layer.device,
-            )
+            if self.use_reset_attention_mask:
+                assert self.training == True, "now only use in train mode"
+                # [1, 1, sq, sk]
+                if attention_mask.shape[0] == 1:
+                    attention_mask = attention_mask.repeat(batch_size, 1, 1, 1)
+                attention_mask = torch.where(attention_mask, 0, 1)
+                # [b*s]
+                cumsum = torch.cumsum(attention_mask.view(output_size[0], output_size[2], output_size[3]), dim=1, dtype=torch.int32)[:, -1, :].flatten()
+                real_indices_idx = torch.nonzero(cumsum).flatten()
+                cu_seqlens_q = F.pad(torch.nonzero(cumsum[real_indices_idx] == 1).flatten() + 1, (1, 0)).type(torch.int32).to(query_layer.device)
+                max_seqlen_q = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item()
+            else:
+                cu_seqlens_q = torch.arange(
+                    0,
+                    (batch_size + 1) * max_seqlen_q,
+                    step=max_seqlen_q,
+                    dtype=torch.int32,
+                    device=query_layer.device,
+                )
 
-            cu_seqlens_k = torch.arange(
-                0,
-                (batch_size + 1) * max_seqlen_k,
-                step=max_seqlen_k,
-                dtype=torch.int32,
-                device=key_layer.device,
-            )
+                cu_seqlens_k = torch.arange(
+                    0,
+                    (batch_size + 1) * max_seqlen_k,
+                    step=max_seqlen_k,
+                    dtype=torch.int32,
+                    device=key_layer.device,
+                )
 
             if not self.training:
 
@@ -603,7 +615,6 @@ class ParallelSelfAttention(nn.Module):
                 )
 
             else:
-
                 # [sq, b, np, hn] -> [b * sq, 1, np, hn]
                 query_layer = query_layer.transpose(0, 1).reshape(
                     output_size[0] * output_size[2], 1, output_size[1], -1
@@ -611,6 +622,8 @@ class ParallelSelfAttention(nn.Module):
 
                 # Combined q/k/v into [b * s, 3, np, hn].
                 qkv = torch.cat([query_layer, key_layer, value_layer], dim=1)
+                if self.use_reset_attention_mask:
+                    qkv = qkv.view(output_size[0] * output_size[2], -1)[real_indices_idx].view(-1, *qkv.shape[1:])
 
                 output = self.flash_qkv_fn(
                     qkv,
@@ -620,6 +633,11 @@ class ParallelSelfAttention(nn.Module):
                     softmax_scale=None,
                     causal=True,
                 )
+                if self.use_reset_attention_mask:
+                    _output = torch.zeros((query_layer.shape[0], *output.shape[1:]), dtype=output.dtype, device=output.device)
+                    _output[real_indices_idx] = output
+                    output = _output
+
 
             # [b * sq, np, hn] -> [b, sq, np, hn]
             matmul_result = output.view(
@@ -756,7 +774,10 @@ class ParallelSelfAttention(nn.Module):
             present = torch.stack((key_layer, value_layer))
 
         if self.use_flash_attention:
-            context_layer = self.flash_attention(query_layer, key_layer, value_layer)
+            if self.use_reset_attention_mask:
+                context_layer = self.flash_attention(query_layer, key_layer, value_layer, attention_mask)
+            else:
+                context_layer = self.flash_attention(query_layer, key_layer, value_layer)
         elif self.use_flash_attention_triton:
             assert self.pos_emb != "alibi", "Not applicable to alibi"
             # In flash_attention_triton.py, bias must be either q.dtype or float
