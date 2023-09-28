@@ -3,15 +3,14 @@ This README outlines the key changes and additions made in this repository compa
 
 - Add data processing of sft (support `alpaca (single-round) && sharegpt (multi-round)`), dataset splicing mode and fix some bugs.
 
-- Add `reset_mask` and `reset_id` to see if you can see the front when splicing, and reset the position id (`reset_mask` can currently only use `global attention` and `flash attention triton`).
+- Add `reset_mask` and `reset_id` to see if you can see the front when splicing, and reset the position id (It can be used in `flash_attention, flash_attention_triton, global attention`, but requires more testing).
 
-- Add `flash_attention v1 && v2`, depending on the version installed, `reset_mask` is currently not supported; while `flash_attention_triton` only supports `v1` and can support `reset_mask`, which is difficult to test and loss will be a little different, but the trend is the same.
+- Add `flash_attention v1 && v2`, depending on the version installed, `reset_mask` is currently supported in `training mode`; while `flash_attention_triton` only supports `v1` and can support `reset_mask`, which is difficult to test and loss will be a little different, but the trend is the same.
 
 - `Llama2` and `Llama1` have been merged, the main difference is that when `qkv weight` is splicing, if `GQA/MQA` is used, `torch.cat(QKV)` is used, otherwise `torch.stack(QKV)` is used. It is reflected in `./tools/convert_neox_llama_weights_to_hf.py` and `./tools/convert_raw_llama_weights_to_neox.py`.
 
 # To-Do List
 
-- Address the reset mask functionality in flash attention.
 - Add NTK.
 - some issue: bf16 + zero stage 1 + cpu offload.
 
