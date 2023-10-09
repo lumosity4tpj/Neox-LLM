@@ -353,7 +353,6 @@ class ParallelSelfAttention(nn.Module):
         self.use_flash_attention_triton = self.attention_type == "flash_triton"
         self.sparse = self.attention_type not in ("global", "flash", "flash_triton")
         self.use_reset_attention_mask = neox_args.reset_attention_mask
-        assert (self.use_reset_attention_mask and not self.use_flash_attention) or not self.use_reset_attention_mask, "unsupport the flash attention, please use global or flash attention triton"
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
