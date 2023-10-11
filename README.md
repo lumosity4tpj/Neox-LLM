@@ -9,9 +9,10 @@ This README outlines the key changes and additions made in this repository compa
 
 - `Llama2` and `Llama1` have been merged, the main difference is that when `qkv weight` is splicing, if `GQA/MQA` is used, `torch.cat(QKV)` is used, otherwise `torch.stack(QKV)` is used. It is reflected in `./tools/convert_neox_llama_weights_to_hf.py` and `./tools/convert_raw_llama_weights_to_neox.py`.
 
+- `Rotary Position Embedding` supports `Dynamic Scaled` to use a longer length, controlling the `scale factor` through `neox_args.ntk`.
+
 # To-Do List
 
-- Add NTK.
 - some issue: bf16 + zero stage 1 + cpu offload.
 
 

@@ -1089,6 +1089,7 @@ class NeoXArgs(*BASE_CLASSES):
             "hidden_size",
             "num_attention_heads",
             "max_position_embeddings",
+            "ntk",
         ]
         for req_arg in required_args:
             if getattr(self, req_arg) is None:
@@ -1113,10 +1114,10 @@ class NeoXArgs(*BASE_CLASSES):
             return False
 
         if self.seq_length is not None:
-            if not (self.max_position_embeddings >= self.seq_length):
+            if not self.ntk and not (self.max_position_embeddings >= self.seq_length):
                 error_message = (
                     self.__class__.__name__
-                    + ".validate_values() max_position_embeddings must be bigger or equal seq_length"
+                    + ".validate_values() max_position_embeddings must be bigger or equal seq_length, you can use DynamicRotaryScalingEmbedding by using nexo_args.utk"
                 )
                 logging.error(error_message)
                 raise ValueError(error_message)

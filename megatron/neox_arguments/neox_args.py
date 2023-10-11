@@ -136,6 +136,11 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Maximum number of position embeddings to use. This is the size of position embedding.
     """
 
+    ntk: int = False
+    """
+    Scale factor for the DynamicRotaryScalingEmbedding.
+    """
+
     norm: Literal["layernorm", "rmsnorm", "scalenorm"] = "layernorm"
     """
     Normalization layer to use. Choose from "layernorm", "rmsnorm", "scalenorm".

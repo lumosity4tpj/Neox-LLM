@@ -36,31 +36,50 @@ class SinusoidalPositionalEmbedding(torch.nn.Module):
 
 
 class RotaryEmbedding(torch.nn.Module):
-    def __init__(self, dim, base=10000, precision=torch.half):
+    """refer from https://github.com/jquesnelle/yarn/blob/master/scaled_rope/LlamaDynamicScaledRotaryEmbedding.py"""
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, ntk=False, precision=torch.half):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq)
-        self.seq_len_cached = None
-        self.cos_cached = None
-        self.sin_cached = None
-        self.precision = precision
+        self.ntk = ntk
+        self.base = base
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+
+        # Build here to make `torch.jit.trace` work.
+        self.max_seq_len_cached = max_position_embeddings
+        t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=torch.float32)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        emb = torch.cat((freqs, freqs), dim=-1)
+        dtype = torch.get_default_dtype()
+        self.register_buffer("cos_cached", emb.cos()[:, None, None, :].to(dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin()[:, None, None, :].to(dtype), persistent=False)
 
     def forward(self, x, seq_dim=1, seq_len=None):
+        # x: [bs, seq_len, num_attention_heads, head_size]
         if seq_len is None:
             seq_len = x.shape[seq_dim]
-        if seq_len != self.seq_len_cached:
-            self.seq_len_cached = seq_len
-            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
+
+        # This `if` block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
+        if seq_len > self.max_seq_len_cached:
+            self.max_seq_len_cached = seq_len
+            if self.ntk:
+                base = self.base * ((self.ntk * seq_len / self.max_position_embeddings) - (self.ntk - 1)) ** (self.dim / (self.dim-2))
+                inv_freq = 1.0 / (base ** (torch.arange(0, self.dim, 2).float().to(x.device) / self.dim))
+                self.register_buffer("inv_freq", inv_freq)
+            t = torch.arange(self.max_seq_len_cached, device=x.device, dtype=torch.float32)
+            if not self.ntk:
+                t *= self.max_position_embeddings / seq_len
             freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+            # Different from paper, but it uses a different permutation in order to obtain the same calculation
             emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-            if self.precision == torch.bfloat16:
-                emb = emb.float()
-            self.cos_cached = emb.cos()[:, None, None, :]
-            self.sin_cached = emb.sin()[:, None, None, :]
-            if self.precision == torch.bfloat16:
-                self.cos_cached = self.cos_cached.bfloat16()
-                self.sin_cached = self.sin_cached.bfloat16()
-        return self.cos_cached, self.sin_cached
+            self.register_buffer("cos_cached", emb.cos()[:, None, None, :].to(x.dtype), persistent=False)
+            self.register_buffer("sin_cached", emb.sin()[:, None, None, :].to(x.dtype), persistent=False)
+        return (
+            self.cos_cached[:seq_len, ...].to(dtype=x.dtype),
+            self.sin_cached[:seq_len, ...].to(dtype=x.dtype),
+        )
 
 
 # rotary pos emb helpers:
