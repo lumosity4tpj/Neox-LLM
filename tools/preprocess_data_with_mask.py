@@ -144,6 +144,7 @@ class Encoder(object):
             text_ids = Encoder.tokenizer.tokenize(text['text'])
             if len(text_ids) > 0:
                 doc_ids.append(text_ids)
+                doc_ids[-1] = [Encoder.tokenizer.bos_token_id] + doc_ids[-1] + [Encoder.tokenizer.eos_token_id]
             if self.args.append_eod:
                 doc_ids[-1].append(Encoder.tokenizer.eod)
             ids[key] = doc_ids

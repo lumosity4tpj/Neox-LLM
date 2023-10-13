@@ -191,6 +191,8 @@ class SentencePieceTokenizer(AbstractTokenizer):
 
         self.tokenizer = spm.SentencePieceProcessor(model_file=vocab_file)
         self.eod_id = self.tokenizer.piece_to_id("<|endoftext|>")
+        self.bos_token_id = self.tokenizer.piece_to_id("<s>")
+        self.eos_token_id = self.tokenizer.piece_to_id("</s>")
 
     @property
     def vocab_size(self):
