@@ -56,8 +56,8 @@ class RotaryEmbedding(torch.nn.Module):
         self.register_buffer("cos_cached", emb.cos()[:, None, None, :].to(dtype), persistent=False)
         self.register_buffer("sin_cached", emb.sin()[:, None, None, :].to(dtype), persistent=False)
 
-    def forward(self, x, seq_dim=1, seq_len=None):
-        # x: [bs, seq_len, num_attention_heads, head_size]
+    def forward(self, x, seq_dim=0, seq_len=None):
+        # x: [seq_len, bs, num_attention_heads, head_size]
         if seq_len is None:
             seq_len = x.shape[seq_dim]
 
