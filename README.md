@@ -13,7 +13,10 @@ This README outlines the key changes and additions made in this repository compa
 
 # To-Do List
 
-- some issue: bf16 + zero stage 1 + cpu offload.
+- some issue: bf16 + zero stage 1 + cpu offload;
+- inference: web demo + api;
+- more evaluation: lm_eval + helm;
+- more docs + logs.
 
 
 # Quick Start
