@@ -170,6 +170,7 @@ def yield_from_files(fnames: list, semaphore):
 
 def main():
     args = get_args()
+    assert args.jsonl_keys == ["text"], "It must be 'text', because lm_dataformat is used, which is written internally and supports only one key"
     encoder = Encoder(args)
     tokenizer = build_tokenizer(args)
     print(f"Vocab size: {tokenizer.vocab_size}")

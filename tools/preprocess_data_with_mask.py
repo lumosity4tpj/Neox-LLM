@@ -297,6 +297,7 @@ def mask(sentence: list, pivot_tokens: list, split_tokens: list, include_pivot=T
 
 def main():
     args = get_args()
+    assert args.jsonl_keys == ["text"], "It must be 'text', because lm_dataformat is used, which is written internally and supports only one key"
     encoder = Encoder(args)
     tokenizer = build_tokenizer(args)
     print(f"Vocab size: {tokenizer.vocab_size}")
